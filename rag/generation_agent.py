@@ -139,9 +139,11 @@ def _history_instructions(refuse: str) -> str:
     return (
         "Clinical facts: use the retrieved patient-record context in the user "
         "message when it is present. "
-        "Conversation: the last few chat turns are in history — use them when "
-        "the question is about a prior question/answer, or to resolve references "
-        "like 'that', 'it', 'previous', or 'last'. "
+        "Conversation: the last few chat turns are already in this message "
+        "history — you MUST use them when the question asks about a prior "
+        "question/answer, or needs references like 'that', 'it', 'previous', "
+        "or 'last'. Example: 'What was my previous query?' → quote the prior "
+        "user question from history. "
         "Do not invent clinical facts that are not in the retrieved context or "
         "clearly stated in recent chat history. "
         "Do not call MCP tools for this question — answer directly. "
@@ -184,6 +186,7 @@ async def run_generation(
         tools=[multi_mcp],
         db=_session_db(),
         add_history_to_context=True,
+        read_chat_history=True,
         num_history_runs=history_runs,
         markdown=False,
     )

@@ -76,7 +76,12 @@ prompts:
       - context_length
     used_by: Agno RAG Generation Agent
     template: |
-      Answer using ONLY the retrieved patient-record context
-      (context_length={{context_length}}). If the answer is not in the records,
+      Clinical facts: answer using ONLY the retrieved patient-record context
+      (context_length={{context_length}}).
+      Conversation: recent chat turns are in history (last 3). When the question
+      is about a prior question/answer or needs a reference like "previous",
+      "last", "that", or "it", answer from that chat history.
+      Do not invent clinical facts missing from records and history.
+      If neither the records nor recent chat history support the answer,
       respond exactly:
       I don't know — this information is not available in the patient records.

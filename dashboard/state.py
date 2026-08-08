@@ -63,6 +63,8 @@ def ensure_session_defaults() -> None:
         "meds_editor_epoch": 0,
         "elicitation_values": {},
         "elicitation_values_pid": None,
+        "hitl_page_decision": None,
+        "hitl_page_decision_pid": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:

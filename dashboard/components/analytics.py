@@ -7,6 +7,7 @@ builders so the dashboard never crashes if :8201 is offline.
 from __future__ import annotations
 
 import json
+import re
 
 from mcp_servers.secondary.tools.generate_risk_heatmap import build_heatmap
 from mcp_servers.secondary.tools.get_population_benchmarks import get_benchmark
@@ -14,6 +15,66 @@ from shared.logger import get_logger
 from shared.settings import get_service
 
 logger = get_logger("hitl_analytics")
+
+_ELICIT_FIELDS_RE = re.compile(r"\(([^)]+)\)")
+
+
+def _fields_from_elicitation_message(message: str) -> list[str]:
+    """Parse '… (age, attending_physician)' from the elicitation gate note."""
+    match = _ELICIT_FIELDS_RE.search(message or "")
+    if not match:
+        return []
+    inner = match.group(1).strip()
+    if not inner or "no fields listed" in inner.lower():
+        return []
+    return [part.strip() for part in inner.split(",") if part.strip()]
+
+
+def expand_findings_for_heatmap(
+    findings: list[dict] | None,
+    *,
+    missing_fields: list[str] | None = None,
+) -> list[dict]:
+    """Split batched elicitation findings into one heatmap row per soft field.
+
+    Validator keeps one ``elicitation_decline`` / ``elicitation_cancel`` finding
+    (SSoT §3.7 batch). For the heatmap we expand that into per-field Info rows
+    so reviewers see age, attending, etc. separately. Scoring / gate still use
+    the original finding list.
+    """
+    out: list[dict] = []
+    fallback_fields = [
+        str(f).strip() for f in (missing_fields or []) if str(f).strip()
+    ]
+    for finding in findings or []:
+        rule = str(finding.get("rule_id") or "")
+        if not rule.startswith("elicitation_"):
+            out.append(dict(finding))
+            continue
+        action = rule[len("elicitation_") :]
+        fields = list(fallback_fields) or _fields_from_elicitation_message(
+            str(finding.get("message") or "")
+        )
+        if not fields:
+            out.append(dict(finding))
+            continue
+        blocking = bool(finding.get("blocking"))
+        severity = str(finding.get("severity") or "info")
+        for field in fields:
+            out.append(
+                {
+                    "rule_id": "missing_soft_field",
+                    "severity": severity,
+                    "message": (
+                        f"Soft field '{field}' unresolved "
+                        f"(elicitation {action})."
+                    ),
+                    "field": field,
+                    "weight": 0,
+                    "blocking": blocking,
+                }
+            )
+    return out
 
 
 def heatmap_from_findings(findings: list[dict]) -> dict:
@@ -57,15 +118,23 @@ async def try_secondary_heatmap(findings: list[dict]) -> tuple[dict, str]:
     return heatmap_from_findings(findings), "local"
 
 
-def load_heatmap(findings: list[dict]) -> tuple[dict, str]:
+def load_heatmap(
+    findings: list[dict],
+    *,
+    missing_fields: list[str] | None = None,
+    expand_elicitation: bool = True,
+) -> tuple[dict, str]:
     """Sync wrapper for Streamlit: Secondary MCP heatmap with local fallback."""
     import asyncio
 
+    rows = list(findings or [])
+    if expand_elicitation:
+        rows = expand_findings_for_heatmap(rows, missing_fields=missing_fields)
     try:
-        return asyncio.run(try_secondary_heatmap(findings or []))
+        return asyncio.run(try_secondary_heatmap(rows))
     except Exception as exc:
         logger.info("Heatmap load failed (%s) — using local builder", exc)
-        return heatmap_from_findings(findings or []), "local"
+        return heatmap_from_findings(rows), "local"
 
 
 async def try_secondary_benchmarks(service_line: str) -> tuple[dict, str]:

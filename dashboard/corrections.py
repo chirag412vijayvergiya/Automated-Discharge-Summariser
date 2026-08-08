@@ -3,8 +3,8 @@
 Clinical rules stay in agents/MCP. This page only:
   - shows Critical findings with fix editors
   - edits medications / bill / follow-up / discharge approval
-  - batches soft elicitation (accept / decline / cancel)
-  - re-validates the working case (Validator only — no re-extract)
+  - page-level Accept / Decline (Accept unlocks Re-run)
+  - re-validates the working case after Accept (Validator only — no re-extract)
 """
 
 from __future__ import annotations
@@ -478,109 +478,105 @@ def page_corrections(
                     field, value=seed, key=f"elicit_{pid}_{field}"
                 )
 
-    e1, e2, e3 = st.columns(3)
-    if e1.button("Accept elicitation", type="primary", key=f"accept_{pid}"):
+    def _clean_elicit_payload() -> dict[str, Any]:
         clean = {k: v for k, v in elicited.items() if v not in ("", None)}
-        # Include critical-panel soft overlaps in the staged accept payload
         if "followup" in open_panels and case.get("follow_up_appointment"):
             clean["follow_up_appointment"] = case["follow_up_appointment"]
+        return clean
+
+    # ---- Page decision: Accept unlocks Re-run; Decline keeps HITL ----
+    st.markdown(
+        '<div class="section-label">Corrections decision</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Accept applies your critical fixes and soft fields on Re-run. "
+        "Decline keeps the case on mandatory review (Re-run stays locked)."
+    )
+    if st.session_state.get("hitl_page_decision_pid") != pid:
+        st.session_state.hitl_page_decision = None
+        st.session_state.hitl_page_decision_pid = pid
+
+    decision = st.session_state.get("hitl_page_decision")
+    d1, d2 = st.columns(2)
+    if d1.button("Accept", type="primary", key=f"hitl_accept_{pid}", use_container_width=True):
+        clean = _clean_elicit_payload()
         stage_elicitation_response("accept", clean)
         st.session_state["elicitation_values"] = clean
         st.session_state["elicitation_values_pid"] = pid
+        st.session_state.hitl_page_decision = "accept"
+        st.session_state.hitl_page_decision_pid = pid
+        st.session_state["hitl_approval"] = "Accept"
         save_feedback(
             pid,
             {
+                "decision": "accept",
+                "approval": "Accept",
                 "elicitation_action": "accept",
                 "elicited_values": clean,
                 "missing_fields": fields,
+                "medications": _meds_for_patient(pid, case, feedback),
+                "bill": case.get("bill"),
+                "follow_up_appointment": case.get("follow_up_appointment"),
+                "discharge_ok": case.get("discharge_ok"),
             },
         )
         append_feedback(
             {
                 "patient_id": pid,
-                "action": "elicitation_accept",
+                "action": "hitl_accept",
                 "fields": list(clean.keys()),
             }
         )
-        st.success(f"Staged ACCEPT with {len(clean)} field(s). Re-run validation to apply.")
-    if e2.button("Decline elicitation", key=f"decline_{pid}"):
+        st.success("Accepted — Re-run validation is unlocked.")
+        st.rerun()
+    if d2.button("Decline", key=f"hitl_decline_{pid}", use_container_width=True):
         stage_elicitation_response("decline")
+        st.session_state["elicitation_values"] = {}
+        st.session_state["elicitation_values_pid"] = pid
+        st.session_state.hitl_page_decision = "decline"
+        st.session_state.hitl_page_decision_pid = pid
+        st.session_state["hitl_approval"] = "Decline"
         save_feedback(
-            pid, {"elicitation_action": "decline", "missing_fields": fields}
+            pid,
+            {
+                "decision": "decline",
+                "approval": "Decline",
+                "elicitation_action": "decline",
+                "missing_fields": fields,
+            },
         )
-        append_feedback({"patient_id": pid, "action": "elicitation_decline"})
-        st.warning("Staged DECLINE — case stays on mandatory review.")
-    if e3.button("Cancel elicitation", key=f"cancel_{pid}"):
-        stage_elicitation_response("cancel")
-        save_feedback(
-            pid, {"elicitation_action": "cancel", "missing_fields": fields}
-        )
-        append_feedback({"patient_id": pid, "action": "elicitation_cancel"})
-        st.warning("Staged CANCEL — case stays on mandatory review.")
+        append_feedback({"patient_id": pid, "action": "hitl_decline"})
+        st.warning("Declined — Re-run stays locked; case remains on mandatory review.")
+        st.rerun()
 
-    # ---- Risk override & approval note (audit only) ----
-    st.markdown(
-        '<div class="section-label">Risk override & approval</div>',
-        unsafe_allow_html=True,
-    )
-    current_risk = (
-        (val or {}).get("risk", {}) or {}
-    ).get("level") or (val or {}).get("risk_level") or "low"
-    override = st.selectbox(
-        "Risk label override",
-        ["(no override)", "low", "medium", "high"],
-        index=0,
-        key=f"risk_override_box_{pid}",
-    )
-    approval = st.radio(
-        "Approval decision",
-        ["Pending", "Approve", "Request changes", "Reject"],
-        horizontal=True,
-        index=0,
-        key=f"approval_{pid}",
-    )
-    note = st.text_area(
-        "Correction note",
-        value=st.session_state.get("approval_note") or "",
-        height=100,
-        key=f"note_{pid}",
-    )
-    st.session_state.approval_note = note
+    if decision == "accept":
+        st.caption("Decision: **Accept** — you can Re-run validation below.")
+    elif decision == "decline":
+        st.caption("Decision: **Decline** — Re-run is locked.")
+    else:
+        st.caption("Decision: pending — Accept before Re-run.")
 
-    if st.button("Save feedback", type="primary", key=f"save_fb_{pid}"):
-        payload = {
-            "medications": _meds_for_patient(pid, case, feedback),
-            "bill": case.get("bill"),
-            "follow_up_appointment": case.get("follow_up_appointment"),
-            "discharge_ok": case.get("discharge_ok"),
-            "risk_override": None if override.startswith("(") else override,
-            "approval": approval,
-            "approval_note": note,
-            "elicited_values": st.session_state.get("elicitation_values") or {},
-            "original_risk_level": current_risk,
-            "original_discharge_blocked": (val or {}).get("discharge_blocked"),
-            "critical_rules": [i["rule_id"] for i in issues],
-            "pipeline_trace_id": st.session_state.get("trace_id"),
-        }
-        path = save_feedback(pid, payload)
-        st.session_state["hitl_approval"] = approval
-        st.session_state["risk_override"] = payload["risk_override"] or "Keep model"
-        append_feedback({"patient_id": pid, "action": "save_feedback", **payload})
-        st.success(f"Saved `{path}`")
-
-    # ---- Re-run validation ----
+    # ---- Re-run validation (only after Accept) ----
     st.markdown(
         '<div class="section-label">Re-run validation</div>',
         unsafe_allow_html=True,
     )
+    accepted = decision == "accept"
     st.caption(
-        "Applies critical fixes + staged elicitation on the current case, then "
+        "Applies critical fixes + accepted soft fields on the current case, then "
         "re-validates only (no re-extract / re-normalize) and re-indexes RAG. "
-        "Requires Primary MCP, Secondary MCP, and Mock EHR. "
-        "Use Process patient if intake files on disk changed."
+        "Requires Primary MCP, Secondary MCP, and Mock EHR."
+        if accepted
+        else "Accept Corrections first to unlock Re-run validation."
     )
 
-    if st.button("Re-run validation", type="primary", key=f"rerun_{pid}"):
+    if st.button(
+        "Re-run validation",
+        type="primary",
+        key=f"rerun_{pid}",
+        disabled=not accepted,
+    ):
         status = st.status("Re-running validation…", expanded=True)
         try:
             working_case = dict(st.session_state.case or {})
@@ -595,7 +591,7 @@ def page_corrections(
                 for k, v in fb_elicit.items():
                     if v not in ("", None) and k not in elicit_values:
                         elicit_values[k] = v
-            # Re-run should use the form on this page even if Accept was not clicked
+            # Refresh from current form after Accept
             form_vals = {
                 k: v for k, v in (elicited or {}).items() if v not in ("", None)
             }

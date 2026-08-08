@@ -81,3 +81,55 @@ def test_load_heatmap_falls_back_local(monkeypatch):
     )
     assert src == "local"
     assert heat["totals"]["warning"] == 1
+
+
+def test_expand_elicitation_decline_into_per_field_rows():
+    from dashboard.components.analytics import expand_findings_for_heatmap
+
+    findings = [
+        {
+            "rule_id": "allergy_contradiction_check",
+            "severity": "critical",
+            "weight": 8,
+            "blocking": True,
+            "message": "Allergy conflict",
+            "field": "medications",
+        },
+        {
+            "rule_id": "elicitation_decline",
+            "severity": "info",
+            "weight": 0,
+            "blocking": True,
+            "message": (
+                "Missing-field elicitation was declined "
+                "(age, attending_physician). Fill gaps on Corrections."
+            ),
+            "field": None,
+        },
+    ]
+    rows = expand_findings_for_heatmap(findings)
+    assert len(rows) == 3
+    soft = [r for r in rows if r.get("rule_id") == "missing_soft_field"]
+    assert {r["field"] for r in soft} == {"age", "attending_physician"}
+    heat = heatmap_from_findings(rows)
+    assert heat["totals"]["critical"] == 1
+    assert heat["totals"]["info"] == 2
+
+
+def test_expand_uses_missing_fields_list():
+    from dashboard.components.analytics import expand_findings_for_heatmap
+
+    rows = expand_findings_for_heatmap(
+        [
+            {
+                "rule_id": "elicitation_decline",
+                "severity": "Info",
+                "weight": 0,
+                "blocking": True,
+                "message": "declined",
+            }
+        ],
+        missing_fields=["age", "ward", "attending_physician"],
+    )
+    assert len(rows) == 3
+    assert [r["field"] for r in rows] == ["age", "ward", "attending_physician"]
