@@ -6,6 +6,7 @@ Five FA5 Table 13 pages. Agents own business rules; this UI only calls them.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import streamlit as st
@@ -80,6 +81,8 @@ def _clear_case_state() -> None:
     st.session_state.edited_meds_epoch = None
     st.session_state.elicitation_values = {}
     st.session_state.elicitation_values_pid = None
+    st.session_state.hitl_page_decision = None
+    st.session_state.hitl_page_decision_pid = None
     _bump_meds_editor_epoch()
 
 
@@ -94,6 +97,29 @@ def _select_patient(pid: str) -> None:
     if changed:
         _clear_case_state()
     st.rerun()
+
+
+def _langfuse_open_url() -> str | None:
+    """Prefer current case trace URL; otherwise LangFuse host home."""
+    cached = str(st.session_state.get("langfuse_trace_url") or "").strip()
+    if cached.startswith("http"):
+        return cached
+    tid = str(st.session_state.get("trace_id") or "").strip()
+    if tid:
+        try:
+            from shared.tracing.langfuse import trace_url
+
+            got = (trace_url(tid) or "").strip()
+            if got.startswith("http"):
+                return got
+        except Exception:
+            pass
+    host = (
+        os.environ.get("LANGFUSE_HOST")
+        or os.environ.get("LANGFUSE_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    return host or None
 
 
 def _sidebar() -> str:
@@ -194,6 +220,18 @@ def _sidebar() -> str:
         st.session_state.page = page
         if page != "Upload new patients":
             st.session_state.last_clinical_page = page
+
+        st.markdown('<div class="nav-group-label">Observability</div>', unsafe_allow_html=True)
+        lf_url = _langfuse_open_url()
+        if lf_url:
+            st.link_button(
+                "LangFuse Tracing",
+                lf_url,
+                use_container_width=True,
+                help="Open LangFuse traces in a new tab",
+            )
+        else:
+            st.caption("Set LANGFUSE_HOST to enable tracing link")
     return page
 
 
@@ -259,6 +297,8 @@ def _sync_from_pipeline(out: dict[str, Any]) -> None:
     st.session_state.edited_meds_epoch = None
     st.session_state.elicitation_values = {}
     st.session_state.elicitation_values_pid = None
+    st.session_state.hitl_page_decision = None
+    st.session_state.hitl_page_decision_pid = None
     _bump_meds_editor_epoch()
     # Disk drafts must not outrank this extract on Corrections
     pid = str(out.get("patient_id") or st.session_state.get("patient_id") or "")
@@ -727,7 +767,8 @@ def page_validation() -> None:
     from dashboard.components.analytics import load_heatmap
     import pandas as pd
 
-    heatmap, heat_src = load_heatmap(findings)
+    soft_for_heat = list(val.get("missing_fields") or val.get("missing_soft") or [])
+    heatmap, heat_src = load_heatmap(findings, missing_fields=soft_for_heat)
     totals = heatmap.get("totals") or {}
     cells = heatmap.get("cells") or {}
 
@@ -737,9 +778,9 @@ def page_validation() -> None:
     )
     st.caption(
         "Groups this patient’s validation findings by severity "
-        "(critical / warning / info). Bars = number of findings in each bucket. "
-        "Rows = the rules that fired (weight feeds the risk score; blocking can "
-        "stop discharge)."
+        "(critical / warning / info). Bars = number of rows in each bucket. "
+        "Batched soft elicitation gaps (age, attending, …) are shown as one "
+        "Info row per field so the chart matches the gaps you need to fix."
     )
     st.caption(f"Source · {heat_src}")
 

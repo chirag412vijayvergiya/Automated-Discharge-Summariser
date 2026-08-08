@@ -4,9 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Patient search</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script src="./streamlit-component-lib.js"></script>
     <style>
-      /* Match sidebar rail — never leave browser-default white iframe chrome. */
       html, body {
         margin: 0;
         padding: 0;
@@ -14,16 +16,16 @@
         height: 44px;
         max-height: 44px;
         overflow: hidden;
-        background: #0b1220 !important;
+        background: #070708 !important;
         color-scheme: dark;
-        font-family: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+        font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
       }
       .wrap {
         position: relative;
         width: 100%;
         height: 44px;
         box-sizing: border-box;
-        background: #0b1220;
+        background: #070708;
       }
       .wrap::before {
         content: "";
@@ -36,7 +38,7 @@
         pointer-events: none;
         background-repeat: no-repeat;
         background-size: contain;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8' stroke-width='2.2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath stroke-linecap='round' d='M20 20l-3.5-3.5'/%3E%3C/svg%3E");
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a' stroke-width='2.2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath stroke-linecap='round' d='M20 20l-3.5-3.5'/%3E%3C/svg%3E");
         z-index: 2;
       }
       input {
@@ -45,25 +47,25 @@
         box-sizing: border-box;
         height: 2.5rem;
         border-radius: 9px;
-        border: 1px solid #2a3a52;
-        background: #121c2c;
-        color: #f1f5f9;
+        border: 1px solid #27272a;
+        background: #18181b;
+        color: #fafafa;
         font-size: 0.88rem;
         font-weight: 500;
         padding: 0 0.75rem 0 2.1rem;
         outline: none;
-        caret-color: #f1f5f9;
+        caret-color: #2dd4bf;
         transition: border-color 160ms ease, box-shadow 160ms ease;
       }
       input::placeholder {
-        color: #8b9bb0;
+        color: #71717a;
         font-weight: 400;
         opacity: 1;
       }
-      input:hover { border-color: #3a516e; }
+      input:hover { border-color: #3f3f46; }
       input:focus {
-        border-color: #14b8a6;
-        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.22);
+        border-color: #2dd4bf;
+        box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.2);
       }
     </style>
   </head>
@@ -93,13 +95,10 @@
         if (Number.isFinite(Number(args.debounce))) {
           waitMs = Number(args.debounce);
         }
-        // Hard reset after patient select (new nonce / reset flag).
         if (args.reset) {
           input.value = args.value || "";
           return;
         }
-        // After Streamlit remounts the iframe, restore last value — but NEVER
-        // while the user is focused/typing (that was the "can't type" bug).
         if (document.activeElement !== input) {
           const next = typeof args.value === "string" ? args.value : "";
           if (next !== input.value) {
@@ -115,7 +114,6 @@
       }
 
       input.addEventListener("input", emitDebounced);
-      // Keep focus responsive; don't let parent clicks steal mid-keystroke awkwardly.
       input.addEventListener("keydown", function (e) {
         e.stopPropagation();
       });
