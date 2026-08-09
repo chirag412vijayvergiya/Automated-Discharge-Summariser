@@ -34,10 +34,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from shared.guardrails.pii_redactor import redact_text
 from shared.logger import get_logger
 from shared.settings import get_path
 
 logger = get_logger("langfuse")
+
+# Structured fields that should never appear plaintext in LangFuse / local traces.
+_ADDRESS_KEYS = {
+    "address",
+    "addr",
+    "home_address",
+    "mailing_address",
+    "residential_address",
+    "patient_address",
+}
 
 _current_trace_id: ContextVar[str | None] = ContextVar("case_trace_id", default=None)
 # Stack of open local parent names (for JSON tree when cloud client is off).
@@ -135,12 +146,33 @@ def _traces_dir() -> Path:
     return path
 
 
+def _redact_value(value: Any) -> Any:
+    """Mask PII/PHI in values before they reach LangFuse or local traces (SSoT §8)."""
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, item in value.items():
+            key_l = str(key).strip().lower()
+            if key_l in _ADDRESS_KEYS and isinstance(item, str) and item.strip():
+                out[key] = "[ADDRESS_REDACTED]"
+            else:
+                out[key] = _redact_value(item)
+        return out
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item) for item in value)
+    return value
+
+
 def _safe_payload(value: Any, *, limit: int = 4000) -> Any:
-    """JSON-friendly, size-capped payload for LangFuse / local file."""
+    """JSON-friendly, PII-redacted, size-capped payload for LangFuse / local file."""
+    value = _redact_value(value)
     try:
         text = json.dumps(value, ensure_ascii=False, default=str)
     except Exception:
-        text = str(value)
+        text = redact_text(str(value))
     if len(text) > limit:
         return text[:limit] + f"…(+{len(text) - limit} chars)"
     try:
@@ -217,7 +249,7 @@ def observation(
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
     as_type = _as_type_for(kind)
-    meta = {**(metadata or {}), "kind": kind}
+    meta = _redact_value({**(metadata or {}), "kind": kind})
     if parent_name:
         meta["parent"] = parent_name
     in_payload = _safe_payload(input_payload)
@@ -250,6 +282,7 @@ def observation(
         finally:
             duration_ms = (time.perf_counter() - started) * 1000
             out_payload = _safe_payload(handle.output)
+            event_meta = _redact_value({**meta, **handle.metadata})
             event = {
                 "name": name,
                 "kind": kind,
@@ -257,13 +290,13 @@ def observation(
                 "parent": parent_name,
                 "level": handle.level,
                 "status": handle.status,
-                "error": handle.error,
+                "error": redact_text(handle.error) if handle.error else handle.error,
                 "duration_ms": round(duration_ms, 2),
                 "started_at": started_at,
                 "ended_at": datetime.now(timezone.utc).isoformat(),
                 "input": in_payload,
                 "output": out_payload,
-                "metadata": {**meta, **handle.metadata},
+                "metadata": event_meta,
                 "model": handle.model,
                 "usage": handle.usage,
                 "cost": handle.cost,
@@ -274,11 +307,11 @@ def observation(
                 try:
                     update: dict[str, Any] = {
                         "output": out_payload,
-                        "metadata": {**meta, **handle.metadata, "duration_ms": duration_ms},
+                        "metadata": {**event_meta, "duration_ms": duration_ms},
                     }
                     if handle.error:
                         update["level"] = "ERROR"
-                        update["status_message"] = handle.error
+                        update["status_message"] = redact_text(handle.error)
                     if handle.model:
                         update["model"] = handle.model
                     if handle.usage:
