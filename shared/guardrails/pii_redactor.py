@@ -1,4 +1,4 @@
-"""PIIRedactor — mask name/phone/Aadhaar/PAN before logging/API (SSoT §8)."""
+"""PIIRedactor — mask name/phone/Aadhaar/PAN/address before logging/API (SSoT §8)."""
 
 from __future__ import annotations
 
@@ -13,9 +13,18 @@ _PHONE_RE = re.compile(
     r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)"
     r"|(?<!\d)\+\d{1,3}[\s-]?\d{6,12}(?!\d)"
 )
+# Labeled address lines in clinical text / logs
+_ADDRESS_LABEL_RE = re.compile(
+    r"(?im)\b((?:residential\s+|home\s+|mailing\s+|patient\s+)?address|addr)\s*[:=]\s*(.+)$"
+)
 
 
-def redact_text(text: str, *, names: list[str] | None = None) -> str:
+def redact_text(
+    text: str,
+    *,
+    names: list[str] | None = None,
+    addresses: list[str] | None = None,
+) -> str:
     """Mask PII/PHI patterns in a string. Safe for logging / outbound API payloads."""
     if not text:
         return text
@@ -24,6 +33,7 @@ def redact_text(text: str, *, names: list[str] | None = None) -> str:
     out = _AADHAAR_RE.sub("XXXX-XXXX-XXXX", out)
     out = _PAN_RE.sub("XXXXXXXXXX", out)
     out = _PHONE_RE.sub("[PHONE_REDACTED]", out)
+    out = _ADDRESS_LABEL_RE.sub(r"\1: [ADDRESS_REDACTED]", out)
 
     for name in names or []:
         name = (name or "").strip()
@@ -32,12 +42,29 @@ def redact_text(text: str, *, names: list[str] | None = None) -> str:
         # Whole-word-ish replace (case-insensitive)
         out = re.sub(re.escape(name), "[NAME_REDACTED]", out, flags=re.IGNORECASE)
 
+    for address in addresses or []:
+        address = (address or "").strip()
+        if len(address) < 5:
+            continue
+        out = re.sub(
+            re.escape(address), "[ADDRESS_REDACTED]", out, flags=re.IGNORECASE
+        )
+
     return out
 
 
-def redact_for_log(message: object, *, names: list[str] | None = None) -> str:
+def redact_for_log(
+    message: object,
+    *,
+    names: list[str] | None = None,
+    addresses: list[str] | None = None,
+) -> str:
     """Convenience wrapper for logger formatters / call sites."""
-    return redact_text("" if message is None else str(message), names=names)
+    return redact_text(
+        "" if message is None else str(message),
+        names=names,
+        addresses=addresses,
+    )
 
 
 # Module-level alias matching SSoT module name
@@ -45,5 +72,9 @@ class PIIRedactor:
     """Thin class wrapper so imports match FA5 Table 12 naming."""
 
     @staticmethod
-    def redact(text: str, names: list[str] | None = None) -> str:
-        return redact_text(text, names=names)
+    def redact(
+        text: str,
+        names: list[str] | None = None,
+        addresses: list[str] | None = None,
+    ) -> str:
+        return redact_text(text, names=names, addresses=addresses)
